@@ -139,3 +139,9 @@ dmypy.json
 .DS_Store
 
 .idea/
+
+# Sensitive config files
+src/cookies.json
+src/telegram.json
+telegram_test_file.txt
+test_telegram_bot.py

@@ -25,6 +25,36 @@ class Telegram:
             api_hash=self.api_hash,
         )
 
+    def send_message(self, message: str):
+        """
+        Send a text message to the user's Saved Messages via Telethon.
+        """
+
+        async def _send():
+            try:
+                await self.client.connect()
+
+                if not await self.client.is_user_authorized():
+                    await self.client.start()
+
+                logger.info(f"Sending Telegram message: {message}")
+
+                await self.client.send_message(
+                    entity=self.chat_id,
+                    message=message,
+                    parse_mode="html"
+                )
+
+                logger.info("Message successfully sent to Telegram.\n")
+
+            except Exception as e:
+                logger.error(f"Error during Telegram message send: {e}\n")
+
+            finally:
+                await self.client.disconnect()
+
+        asyncio.run(_send())
+
     def upload(self, file_path: str):
         """
         Upload a file to the user's Saved Messages via Telethon.
@@ -57,7 +87,7 @@ class Telegram:
                         "with this type of account."
                     )
                     return
-
+                
                 logger.info(
                     "Uploading video on Telegram... "
                     "This may take a while depending on file size."

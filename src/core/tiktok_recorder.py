@@ -200,16 +200,24 @@ class TikTokRecorder:
         if not live_url:
             raise LiveNotFound(TikTokError.RETRIEVE_LIVE_URL)
 
-        current_date = time.strftime("%Y.%m.%d_%H-%M-%S", time.localtime())
-
+        # Prepare output directory (Req 1: UserID folder)
         if isinstance(self.output, str) and self.output != "":
-            if not (self.output.endswith("/") or self.output.endswith("\\")):
-                if os.name == "nt":
-                    self.output = self.output + "\\"
-                else:
-                    self.output = self.output + "/"
+             # Ensure path separators are correct
+            if not self.output.endswith(os.sep):
+                self.output += os.sep
+            
+            # Create user specific folder: output/UserID/
+            self.output = os.path.join(self.output, user)
+            os.makedirs(self.output, exist_ok=True)
+            if not self.output.endswith(os.sep):
+                self.output += os.sep
 
-        output = f"{self.output if self.output else ''}TK_{user}_{current_date}_flv.mp4"
+        # Helper to generate filename
+        def get_output_path():
+            current_date = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+            return f"{self.output}{user}_{current_date}_flv.mp4"
+
+        output = get_output_path()
 
         if self.duration:
             logger.info(f"Started recording for {self.duration} seconds ")
@@ -219,13 +227,38 @@ class TikTokRecorder:
         buffer_size = 512 * 1024  # 512 KB buffer
         buffer = bytearray()
 
-        logger.info("[PRESS CTRL + C ONCE TO STOP]")
-        with open(output, "wb") as out_file:
-            stop_recording = False
-            while not stop_recording:
+        if self.use_telegram:
+            Telegram().send_message(
+                f"🔴 <b>Recording Started</b>\n"
+                f"👤 User: <code>{user}</code>\n"
+                f"📅 Date: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}"
+            )
+
+        import msvcrt # Windows only
+
+        logger.info("[PRESS CTRL + C OR 'Q' TO STOP RECORDING USER]")
+        
+        # Non-blocking keyboard check wrapper
+        def check_keypress():
+            if msvcrt.kbhit():
+                key = msvcrt.getch()
+                if key.lower() == b'q':
+                    return True
+            return False
+
+        # Segment setup (Req 2: 30 mins)
+        segment_duration = 30 * 60  
+        segment_start_time = time.time()
+        
+        stop_recording = False
+
+        while not stop_recording:
+            with open(output, "wb") as out_file:
+                logger.info(f"Recording to file: {output}")
                 try:
                     if not self.tiktok.is_room_alive(room_id):
                         logger.info("User is no longer live. Stopping recording.")
+                        stop_recording = True
                         break
 
                     start_time = time.time()
@@ -234,11 +267,43 @@ class TikTokRecorder:
                         if len(buffer) >= buffer_size:
                             out_file.write(buffer)
                             buffer.clear()
+                        
+                        # Check for 'q' key press
+                        if check_keypress():
+                            logger.info("Stop signal received (Q pressed). Stopping recording...")
+                            stop_recording = True
+                            break
 
+                        # Check global duration
                         elapsed_time = time.time() - start_time
                         if self.duration and elapsed_time >= self.duration:
                             stop_recording = True
                             break
+                        
+                        # Check segment duration (30 mins)
+                        segment_elapsed = time.time() - segment_start_time
+                        if segment_elapsed >= segment_duration:
+                            logger.info(f"Segment limit reached ({segment_duration}s). Switching file.")
+                            # Flush and close current file
+                            if buffer:
+                                out_file.write(buffer)
+                                buffer.clear()
+                            out_file.flush()
+                            out_file.close()
+
+                            # Convert finished segment in background
+                            Thread(target=VideoManagement.convert_flv_to_mp4, args=(output,)).start()
+
+                            # Notify Telegram about segment finish (optional, but good for tracking)
+                            if self.use_telegram:
+                                Telegram().send_message(f"📁 <b>Segment Saved</b>\nFile: <code>{os.path.basename(output).replace('_flv.mp4', '.mp4')}</code>")
+
+                            # Start new segment
+                            output = get_output_path()
+                            segment_start_time = time.time()
+                            
+                            # Re-open new file (break inner loop to re-enter with block)
+                            break 
 
                 except ConnectionError:
                     if self.mode == Mode.AUTOMATIC:
@@ -258,15 +323,26 @@ class TikTokRecorder:
 
                 finally:
                     if buffer:
-                        out_file.write(buffer)
-                        buffer.clear()
-                    out_file.flush()
+                        # If file is closed in loop (segment switch), this might fail?
+                        # No, out_file is context manager scoped, but we close it manually.
+                        # Actually 'with' handles close. If we break, 'with' exit closes it.
+                        if not out_file.closed:
+                            out_file.write(buffer)
+                            buffer.clear()
+                            out_file.flush()
 
+        # Final cleanup for last file
         logger.info(f"Recording finished: {output}\n")
         VideoManagement.convert_flv_to_mp4(output)
 
         if self.use_telegram:
-            Telegram().upload(output.replace("_flv.mp4", ".mp4"))
+            end_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            Telegram().send_message(
+                f"✅ <b>Recording Finished</b>\n"
+                f"👤 User: <code>{user}</code>\n"
+                f"🏁 End Time: {end_time}\n"
+                f"📁 Last File: <code>{os.path.basename(output.replace('_flv.mp4', '.mp4'))}</code>"
+            )
 
     def check_country_blacklisted(self):
         is_blacklisted = self.tiktok.is_country_blacklisted()

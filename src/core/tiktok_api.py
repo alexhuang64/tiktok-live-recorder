@@ -227,7 +227,7 @@ class TikTokAPI:
         Return the cdn (flv or m3u8) of the streaming
         """
         data = self.http_client.get(
-            f"{self.WEBCAST_URL}/webcast/room/info/?aid=1988&room_id={room_id}"
+            f"{self.WEBCAST_URL}/webcast/room/info/?aid=1988&room_id={room_id}&user_is_login=true"
         ).json()
 
         if "This account is private" in data:
@@ -244,6 +244,8 @@ class TikTokAPI:
             logger.warning(
                 "No SDK stream data found. Falling back to legacy URLs. Consider contacting the developer to update the code."
             )
+            # DEBUG LOG
+            logger.info(f"Debug Info - Full Data: {json.dumps(data, indent=4)}")
             return (
                 stream_url.get("flv_pull_url", {}).get("FULL_HD1")
                 or stream_url.get("flv_pull_url", {}).get("HD1")
